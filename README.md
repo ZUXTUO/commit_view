@@ -1,4 +1,5 @@
 # Git 提交历史可视化（git_history）
+[English README](./README.en.md)
 
 一个将 Git 提交历史以图形方式展示的轻量工具。运行后生成 `git_history.svg`，用颜色区分主分支与其他分支，箭头连线体现父子提交关系，节点含提交信息、作者、日期与代码变更统计。
 
