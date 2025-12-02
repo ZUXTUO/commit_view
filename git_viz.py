@@ -65,6 +65,7 @@ repo = Repo(os.getcwd())
 assert not repo.bare, "不是一个 Git 仓库！"
 
 commits = list(repo.iter_commits("--all"))
+print(f"[1/6] 已加载 Git 仓库，共找到 {len(commits)} 个提交")
 
 # 将提交按时间升序排列（最早的在前），用于蛇形布局的顺序遍历
 commits.sort(key=lambda c: c.committed_datetime)
@@ -134,7 +135,13 @@ positions = {}   # sha -> (x, y)
 max_x = 100      # 记录内容区域的最大 x（用于计算画布大小）
 max_y = 100      # 记录内容区域的最大 y（用于计算画布大小）
 
+print("[2/6] 正在计算节点布局...")
+total_commits = len(commits)
+log_step = max(10, total_commits // 10)
+
 for index, c in enumerate(commits):
+    if (index + 1) % log_step == 0 or (index + 1) == total_commits:
+        print(f"    - 布局计算进度: {index + 1}/{total_commits}")
     sha = c.hexsha
 
     positions[sha] = (x, y)
@@ -162,6 +169,8 @@ for index, c in enumerate(commits):
 
 CANVAS_W = max_x + 500
 CANVAS_H = max_y + 500
+
+print(f"[3/6] 正在创建 SVG 画布 ({CANVAS_W}x{CANVAS_H})...")
 dwg = svgwrite.Drawing("git_history.svg",
                        size=(CANVAS_W, CANVAS_H),
                        profile='full')
@@ -180,31 +189,14 @@ galaxy_grad.add_stop_color(1, "#000000")
 dwg.defs.add(galaxy_grad)
 
 dwg.defs.add(dwg.style(
-    "#galaxy{animation:spin 30s linear infinite;transform-box:fill-box;transform-origin:center}"
-    "@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}"
-    ".edge{stroke-dasharray:8 6;animation:dash 3s linear infinite}"
-    "@keyframes dash{to{stroke-dashoffset:-100}}"
+    ".flow-line{stroke-dasharray:10 20;stroke-linecap:round;animation:flow 1s linear infinite}"
+    "@keyframes flow{to{stroke-dashoffset:-30}}"
 ))
 
 # 箭头定义（用于指示由父提交指向子提交的方向）
 arrow = dwg.marker(id="arrowHead", insert=(10, 5), size=(10, 10), orient="auto")
 arrow.add(dwg.path(d="M0,0 L10,5 L0,10 L3,5 Z", fill=EDGE_COLOR))
 dwg.defs.add(arrow)
-
-node_glow = dwg.filter(id="nodeGlow", x="-50%", y="-50%", width="200%", height="200%")
-node_glow.feGaussianBlur(in_="SourceAlpha", stdDeviation=4, result="blur")
-node_glow.feMerge(layernames=["blur", "SourceGraphic"])
-dwg.defs.add(node_glow)
-
-edge_glow = dwg.filter(id="edgeGlow", x="-50%", y="-50%", width="200%", height="200%")
-edge_glow.feGaussianBlur(in_="SourceAlpha", stdDeviation=2.5, result="blur")
-edge_glow.feMerge(layernames=["blur", "SourceGraphic"])
-dwg.defs.add(edge_glow)
-
-text_glow = dwg.filter(id="textGlow", x="-50%", y="-50%", width="200%", height="200%")
-text_glow.feGaussianBlur(in_="SourceAlpha", stdDeviation=1.5, result="blur")
-text_glow.feMerge(layernames=["blur", "SourceGraphic"])
-dwg.defs.add(text_glow)
 
 # 背景（深色主题）
 dwg.add(dwg.rect(insert=(0, 0),
@@ -232,8 +224,7 @@ for scale, color in [(0.22, "#a0c4ff"), (0.30, "#b794f6"), (0.38, "#7dd3fc")]:
                           fill="none",
                           stroke=color,
                           stroke_width=1.2,
-                          opacity=0.6,
-                          filter="url(#edgeGlow)"))
+                          opacity=0.6))
 dwg.add(galaxy)
 
 # ===========================================================
@@ -246,7 +237,10 @@ dwg.add(galaxy)
 CURVE_MARGIN = 150  # 转弯曲线的控制点距离
 CENTER_X_THRESHOLD = (LEFT_BOUND + RIGHT_BOUND) / 2 + NODE_W / 2
 
-for c in commits:
+print("[4/6] 正在绘制连线...")
+for index, c in enumerate(commits):
+    if (index + 1) % log_step == 0 or (index + 1) == total_commits:
+        print(f"    - 连线绘制进度: {index + 1}/{total_commits}")
     sha = c.hexsha
     x1, y1 = positions[sha]
     cx1 = x1 + NODE_W/2
@@ -273,14 +267,14 @@ for c in commits:
             else: # 子节点在左侧
                 end_pt = (x1 + NODE_W, cy1) # 连接到子节点右边缘
                 
-            # 绘制连线光晕（增加可见度）
+            # 绘制连线：实线底色（确保结构清晰）+ 动态流光（视觉效果）
             dwg.add(dwg.line(start=start_pt, end=end_pt, 
-                             stroke=EDGE_COLOR, stroke_width=6, opacity=0.3,
-                             class_="edge"))
-            # 绘制连线主体
+                             stroke=EDGE_COLOR, stroke_width=4, opacity=0.6,
+                             marker_end="url(#arrowHead)"))
+            
             dwg.add(dwg.line(start=start_pt, end=end_pt, 
-                             stroke=EDGE_COLOR, stroke_width=3.5, 
-                             class_="edge", marker_end="url(#arrowHead)"))
+                             stroke="#ffffff", stroke_width=2, opacity=0.8,
+                             class_="flow-line"))
 
         elif is_vertical_aligned:
             # 转角情况：使用贝塞尔曲线连接外侧
@@ -297,9 +291,8 @@ for c in commits:
                 
             path_d = f"M{start_pt[0]},{start_pt[1]} C{cp1[0]},{cp1[1]} {cp2[0]},{cp2[1]} {end_pt[0]},{end_pt[1]}"
             
-            dwg.add(dwg.path(d=path_d, fill="none", stroke=EDGE_COLOR, stroke_width=6, opacity=0.3, class_="edge"))
-            dwg.add(dwg.path(d=path_d, fill="none", stroke=EDGE_COLOR, stroke_width=3.5, 
-                             class_="edge", marker_end="url(#arrowHead)"))
+            dwg.add(dwg.path(d=path_d, fill="none", stroke=EDGE_COLOR, stroke_width=4, opacity=0.6, marker_end="url(#arrowHead)"))
+            dwg.add(dwg.path(d=path_d, fill="none", stroke="#ffffff", stroke_width=2, opacity=0.8, class_="flow-line"))
 
         else:
             # 其他情况（如跨行跳转）：中心 -> 边缘（使用 get_intersect 计算子节点交点）
@@ -307,16 +300,35 @@ for c in commits:
             ex, ey = get_intersect(cx1, cy1, cx2, cy2, NODE_W, NODE_H)
             end_pt = (ex, ey)
             
-            dwg.add(dwg.line(start=start_pt, end=end_pt, stroke=EDGE_COLOR, stroke_width=6, opacity=0.3, class_="edge"))
-            dwg.add(dwg.line(start=start_pt, end=end_pt, stroke=EDGE_COLOR, stroke_width=3.5,
-                             class_="edge", marker_end="url(#arrowHead)"))
+            dwg.add(dwg.line(start=start_pt, end=end_pt, stroke=EDGE_COLOR, stroke_width=4, opacity=0.6, marker_end="url(#arrowHead)"))
+            dwg.add(dwg.line(start=start_pt, end=end_pt, stroke="#ffffff", stroke_width=2, opacity=0.8, class_="flow-line"))
 
 # 2. 绘制节点背景（矩形）
-for c in commits:
+print("[5/6] 正在绘制节点与文本...")
+for index, c in enumerate(commits):
+    if (index + 1) % log_step == 0 or (index + 1) == total_commits:
+        print(f"    - 节点绘制进度: {index + 1}/{total_commits}")
     sha = c.hexsha
     insert_x, insert_y = positions[sha]
     branch_name = branch_map.get(sha)
-    fill_color = NODE_COLOR_MAIN if branch_name == MAIN_BRANCH else NODE_COLOR_BRANCH
+    
+    # 节点颜色逻辑
+    n_in = len(c.parents)          # 入度：父节点数量（指向此节点的线）
+    n_out = len(parent_map[sha])   # 出度：子节点数量（从此节点指出的线）
+
+    if n_in >= 5:
+        fill_color = "#000000"     # >=5条线：黑色
+    elif n_in == 4:
+        fill_color = "#8B0000"     # 4条线：血红色
+    elif n_in == 3:
+        fill_color = "#FF7F50"     # 3条线：浅橘红色
+    elif n_in == 2:
+        fill_color = "#006400"     # 2条线：深绿色
+    elif n_out == 0:
+        fill_color = "#9370DB"     # 无向外箭头（无子节点）：淡紫色
+    else:
+        # 默认逻辑：区分主分支与其他分支
+        fill_color = NODE_COLOR_MAIN if branch_name == MAIN_BRANCH else NODE_COLOR_BRANCH
     
     dwg.add(
         dwg.rect(
@@ -326,8 +338,7 @@ for c in commits:
             fill=fill_color,
             opacity=0.8,
             stroke="white",
-            stroke_width=2,
-            filter="url(#nodeGlow)"
+            stroke_width=2
         )
     )
 
@@ -347,17 +358,15 @@ for c in commits:
         insert=(insert_x + 10, insert_y + 25),
         fill="white",
         font_size="16px",
-        font_family="Consolas, Microsoft YaHei, SimHei",
-        filter="url(#textGlow)"
+        font_family="Consolas, Microsoft YaHei, SimHei"
     ))
 
     dwg.add(dwg.text(
         f"作者：{author} | 日期：{date}",
         insert=(insert_x + 10, insert_y + 45),
-        fill="#DDDDDD",
+        fill="white",
         font_size="12px",
-        font_family="Consolas, Microsoft YaHei, SimHei",
-        filter="url(#textGlow)"
+        font_family="Consolas, Microsoft YaHei, SimHei"
     ))
 
     # 代码变更统计（插入为绿色，删除为红色）
@@ -365,10 +374,9 @@ for c in commits:
         "",
         insert=(insert_x + 10, insert_y + 65),
         font_size="12px",
-        font_family="Consolas, Microsoft YaHei, SimHei",
-        filter="url(#textGlow)"
+        font_family="Consolas, Microsoft YaHei, SimHei"
     )
-    stats_text.add(dwg.tspan("代码变更：", fill="#DDDDDD"))
+    stats_text.add(dwg.tspan("代码变更：", fill="white"))
     stats_text.add(dwg.tspan(f"+{stats['insertions']} / ", fill="#00FFAA"))
     stats_text.add(dwg.tspan(f"-{stats['deletions']}", fill="#FF5555"))
     dwg.add(stats_text)
@@ -378,5 +386,6 @@ for c in commits:
 # 保存 SVG 文件
 # ===========================================================
 
+print("[6/6] 正在保存 SVG 文件...")
 dwg.save()
 print("SVG 已保存为 git_history.svg")
